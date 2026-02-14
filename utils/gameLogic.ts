@@ -18,7 +18,7 @@ const getCnName = (type: CompanyType | null): string => {
     return COMPANY_CONFIGS[type].cnLabel;
 };
 
-export const initializeGame = (connectedPlayers: { peerId: string, name: string }[]): GameState => {
+export const initializeGame = (connectedPlayers: { peerId: string, name: string, uuid: string }[]): GameState => {
   // 1. Create Deck
   let deck: Card[] = [];
   Object.values(COMPANY_CONFIGS).forEach(config => {
@@ -40,6 +40,7 @@ export const initializeGame = (connectedPlayers: { peerId: string, name: string 
   const players: Player[] = shuffledProfiles.map((p, i) => ({
     id: i,
     peerId: p.peerId,
+    uuid: p.uuid, // Bind persistence ID
     name: p.name,
     hand: [],
     tableau: [],

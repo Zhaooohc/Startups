@@ -25,7 +25,8 @@ export interface Card {
 
 export interface Player {
   id: number;
-  peerId: string; // Unique ID from PeerJS
+  peerId: string; // Transient ID (changes on reload)
+  uuid: string;   // Persistent ID (stored in localStorage)
   name: string;
   hand: Card[];
   tableau: Card[];

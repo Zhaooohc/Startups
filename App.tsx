@@ -27,9 +27,20 @@ const PEER_CONFIG = {
     },
 };
 
+// Generate a random UUID for the browser session
+const getOrCreateUUID = () => {
+    let uuid = localStorage.getItem('startups_uuid');
+    if (!uuid) {
+        uuid = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem('startups_uuid', uuid);
+    }
+    return uuid;
+};
+
 const App: React.FC = () => {
   // Network State
   const [peerId, setPeerId] = useState<string | null>(null);
+  const [uuid] = useState<string>(getOrCreateUUID()); // Persistent Browser Identity
   const [peerName, setPeerName] = useState<string>(localStorage.getItem('startups_name') || '');
   const [hostId, setHostId] = useState<string>(localStorage.getItem('startups_hostId') || '');
   const [connectionStatus, setConnectionStatus] = useState<string>('');
@@ -41,7 +52,7 @@ const App: React.FC = () => {
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isHost, setIsHost] = useState<boolean>(localStorage.getItem('startups_isHost') === 'true');
-  const [lobbyPlayers, setLobbyPlayers] = useState<{ peerId: string, name: string }[]>([]);
+  const [lobbyPlayers, setLobbyPlayers] = useState<{ peerId: string, name: string, uuid: string }[]>([]);
 
   // Game State
   const [view, setView] = useState<'LOGIN' | 'LOBBY' | 'GAME'>('LOGIN');
@@ -72,11 +83,45 @@ const App: React.FC = () => {
     switch (msg.type) {
         case 'JOIN_LOBBY':
              if (isHost) {
-                 const newPlayer = msg.payload;
+                 const newPlayer = msg.payload; // { peerId, name, uuid }
+                 
+                 // RECONNECT LOGIC: Check if game is already running and this player exists
+                 if (gameStateRef.current) {
+                     const existingPlayerIndex = gameStateRef.current.players.findIndex(p => p.uuid === newPlayer.uuid);
+                     
+                     if (existingPlayerIndex !== -1) {
+                         // Found returning player!
+                         const updatedGameState = JSON.parse(JSON.stringify(gameStateRef.current)) as GameState;
+                         const player = updatedGameState.players[existingPlayerIndex];
+                         
+                         // Update network ID
+                         player.peerId = newPlayer.peerId; 
+                         player.name = newPlayer.name; // Update name just in case
+                         updatedGameState.logs.push(`${player.name} 断线重连成功！`);
+                         
+                         setGameState(updatedGameState); // Trigger update locally
+                         
+                         // Sync immediately
+                         if (conn && conn.open) {
+                             conn.send({ type: 'UPDATE_GAME_STATE', payload: updatedGameState });
+                         }
+                         setTimeout(() => broadcast({ type: 'UPDATE_GAME_STATE', payload: updatedGameState }), 200);
+                         return;
+                     }
+                 }
+
+                 // STANDARD LOBBY LOGIC
                  setLobbyPlayers(prev => {
-                     // Deduplicate by ID
-                     const exists = prev.find(p => p.peerId === newPlayer.peerId);
-                     const newList = exists ? prev : [...prev, newPlayer];
+                     // Deduplicate by UUID (prefer persistent ID) or PeerID
+                     const exists = prev.find(p => p.uuid === newPlayer.uuid);
+                     
+                     let newList;
+                     if (exists) {
+                         // Update existing entry (e.g. new Peer ID for same browser)
+                         newList = prev.map(p => p.uuid === newPlayer.uuid ? newPlayer : p);
+                     } else {
+                         newList = [...prev, newPlayer];
+                     }
                      
                      // Send immediate feedback to the joiner
                      if (conn && conn.open) {
@@ -85,7 +130,7 @@ const App: React.FC = () => {
                              conn.send({ type: 'UPDATE_GAME_STATE', payload: gameStateRef.current });
                          }
                      }
-                     // Broadcast to everyone else shortly after
+                     // Broadcast to everyone else
                      setTimeout(() => broadcast({ type: 'UPDATE_LOBBY', payload: newList }), 200);
                      return newList;
                  });
@@ -161,14 +206,19 @@ const App: React.FC = () => {
           
           if (autoJoin) {
               if (isHost) {
-                  setLobbyPlayers([{ peerId: id, name }]);
+                  setLobbyPlayers([{ peerId: id, name, uuid }]);
                   setView('LOBBY');
               } else if (hostId) {
                   joinGame();
               }
           } else {
-            setView('LOBBY');
-            setLobbyPlayers([{ peerId: id, name }]);
+            // Check if we were already in a game state?
+            // No, wait for user to click "Join" to be safe and explicit
+            setLobbyPlayers([{ peerId: id, name, uuid }]);
+            if (hostId) {
+                // If we have a stored hostId, maybe user wants to auto-connect?
+                // Let's stay on Login but show ready state
+            }
           }
       });
 
@@ -273,8 +323,8 @@ const App: React.FC = () => {
           setIsHost(false);
           setConnectionStatus("✅ 连接成功");
           
-          // Send join request immediately
-          const msg = { type: 'JOIN_LOBBY', payload: { peerId: peerId, name: peerName } } as NetworkMessage;
+          // Send join request WITH UUID for reconnect support
+          const msg = { type: 'JOIN_LOBBY', payload: { peerId: peerId, name: peerName, uuid: uuid } } as NetworkMessage;
           conn.send(msg);
           conn.send({ type: 'REQUEST_STATE', payload: {} });
       });
@@ -294,7 +344,7 @@ const App: React.FC = () => {
   const cancelJoin = () => {
       setHostId('');
       localStorage.removeItem('startups_hostId');
-      setLobbyPlayers([{ peerId: peerId!, name: peerName }]);
+      setLobbyPlayers([{ peerId: peerId!, name: peerName, uuid }]);
       setConnectionStatus("已取消");
   };
 
