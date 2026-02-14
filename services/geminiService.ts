@@ -9,8 +9,11 @@ const getCompanyLabel = (type: CompanyType) => {
 };
 
 export const getGeminiAdvice = async (gameState: GameState): Promise<string> => {
-  if (!process.env.API_KEY) {
-    return "API Key not found. Unable to provide AI advice.";
+  // Use process.env.API_KEY as per coding guidelines
+  const apiKey = process.env.API_KEY;
+
+  if (!apiKey) {
+    return "API Key not found. Please ensure process.env.API_KEY is available.";
   }
 
   const currentPlayer = gameState.players[gameState.currentPlayerIndex];
@@ -57,7 +60,7 @@ export const getGeminiAdvice = async (gameState: GameState): Promise<string> => 
   `;
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: apiKey });
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,

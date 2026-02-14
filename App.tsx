@@ -7,7 +7,6 @@ import { Market } from './components/Market';
 import { PlayerBoard } from './components/PlayerBoard';
 import { ReferenceGuide } from './components/ReferenceGuide';
 import { ScoringSidebar } from './components/ScoringSidebar';
-import { getGeminiAdvice } from './services/geminiService';
 
 const PEER_CONFIG = {
     debug: 2,
@@ -42,8 +41,6 @@ const App: React.FC = () => {
   // Game State
   const [view, setView] = useState<'LOGIN' | 'LOBBY' | 'GAME'>('LOGIN');
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [advice, setAdvice] = useState<string | null>(null);
-  const [loadingAdvice, setLoadingAdvice] = useState(false);
   const [targetMode, setTargetMode] = useState<'tableau' | 'market'>('tableau');
 
   // Persistence Effects
@@ -95,7 +92,6 @@ const App: React.FC = () => {
         case 'UPDATE_GAME_STATE':
              setGameState(msg.payload);
              setView('GAME');
-             setAdvice(null);
              if (isHost && msg.type === 'UPDATE_GAME_STATE') {
                  broadcast(msg, conn?.peer);
              }
@@ -370,14 +366,6 @@ const App: React.FC = () => {
     syncGameState(newGameState);
   };
 
-  const getAdvice = async () => {
-    if (!gameState) return;
-    setLoadingAdvice(true);
-    const adviceText = await getGeminiAdvice(gameState);
-    setAdvice(adviceText);
-    setLoadingAdvice(false);
-  };
-
   // --- RENDERING ---
   if (view === 'LOGIN' || view === 'LOBBY') {
       return (
@@ -463,7 +451,6 @@ const App: React.FC = () => {
             <div className="flex items-center gap-4">
                 <button onClick={() => sendToHost({ type: 'REQUEST_STATE', payload: {} })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1 rounded text-xs border border-white/10">🔄 强制同步</button>
                 {isHost && !isScoring && !isReadyToScore && <button onClick={handleForceFinish} className="bg-red-900/30 text-red-400 px-3 py-1 rounded text-xs border border-red-500/20">⚠️ 强制结束</button>}
-                {isMyTurn && !isScoring && !isReadyToScore && <button onClick={getAdvice} disabled={loadingAdvice} className="bg-indigo-600 px-4 py-1.5 rounded-full text-xs font-bold">{loadingAdvice ? '思考中...' : 'AI 顾问'}</button>}
             </div>
         </header>
 
@@ -474,8 +461,6 @@ const App: React.FC = () => {
                     <button onClick={handleRevealAndScore} className="bg-blue-500 hover:bg-blue-400 text-white text-lg font-bold px-8 py-3 rounded-full">🔎 开始结算 (亮牌)</button>
                 </div>
             )}
-
-            {advice && <div className="mb-8 bg-indigo-950/40 border border-indigo-500/30 p-4 rounded-xl text-sm text-indigo-100">{advice}</div>}
 
             <Market 
                 market={gameState.market}
