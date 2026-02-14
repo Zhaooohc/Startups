@@ -8,15 +8,20 @@ import { PlayerBoard } from './components/PlayerBoard';
 import { ReferenceGuide } from './components/ReferenceGuide';
 import { ScoringSidebar } from './components/ScoringSidebar';
 
+// Optimized for better connectivity in China + Global
+// Added Bilibili and more robust servers for mobile networks
 const PEER_CONFIG = {
     debug: 2,
+    secure: true, // Force HTTPS/WSS
     config: {
         iceServers: [
+            // China optimized (Bilibili is often very stable)
+            { urls: 'stun:stun.bilibili.com:3478' },
+            { urls: 'stun:stun.qq.com:3478' },
+            { urls: 'stun:stun.miwifi.com:3478' },
+            // Global / Backup
+            { urls: 'stun:stun.syncthing.net:3478' },
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
             { urls: 'stun:global.stun.twilio.com:3478' },
         ],
         iceCandidatePoolSize: 10,
@@ -193,14 +198,16 @@ const App: React.FC = () => {
       
       if (peerRef.current.disconnected) peerRef.current.reconnect();
 
-      setConnectionStatus("连接房主中...");
+      setConnectionStatus("连接房主中 (请耐心等待)...");
       const conn = peerRef.current.connect(cleanHostId, { reliable: true, serialization: 'json' });
       
+      // Increased timeout to 15 seconds for mobile networks
       const timeout = setTimeout(() => {
           if (!connectionsRef.current.some(c => c.peer === cleanHostId && c.open)) {
-              setConnectionStatus("连接超时，请重试");
+              setConnectionStatus("连接超时，正在重试...");
+              // Optional: Don't kill connection immediately, user can click retry
           }
-      }, 5000);
+      }, 15000);
 
       conn.on('open', () => {
           clearTimeout(timeout);
@@ -214,6 +221,12 @@ const App: React.FC = () => {
       });
 
       conn.on('data', (data: NetworkMessage) => handleDataRef.current(data, conn));
+      
+      // Handle connection error explicitly
+      conn.on('error', (err: any) => {
+          console.error("Connection Error", err);
+          setConnectionStatus("连接失败");
+      });
   };
 
   const cancelJoin = () => {
