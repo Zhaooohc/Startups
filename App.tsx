@@ -189,11 +189,8 @@ const App: React.FC = () => {
       });
   };
 
-  // Auto-init on mount if name exists
+  // Disabled auto-init on mount so users can edit their name
   useEffect(() => {
-    if (peerName && !peerRef.current) {
-        initPeer(peerName, true);
-    }
     // Cleanup on unmount
     return () => {
         if (peerRef.current) peerRef.current.destroy();
@@ -278,7 +275,10 @@ const App: React.FC = () => {
           setView('LOGIN'); // Force back to login to ensure clean slate
           // Small delay to allow UI to clear before re-init
           setTimeout(() => {
-             if (peerName) initPeer(peerName, false);
+             // Don't auto init, just let them see login screen
+             if (peerRef.current) peerRef.current.destroy();
+             setPeerId(null);
+             setServerStatus('DISCONNECTED');
           }, 500);
       }
   };
