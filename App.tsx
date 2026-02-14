@@ -8,19 +8,21 @@ import { PlayerBoard } from './components/PlayerBoard';
 import { ReferenceGuide } from './components/ReferenceGuide';
 import { ScoringSidebar } from './components/ScoringSidebar';
 
-// Final Stability Config
+// Final Stability Config - Enhanced for Remote Connections
 const PEER_CONFIG = {
-    debug: 2,
+    debug: 1, // Reduced debug level for performance, use 3 for dev
     secure: true,
     pingInterval: 5000, 
     config: {
         iceServers: [
-            // Xiaomi (Best for CN Wifi)
-            { urls: 'stun:stun.miwifi.com:3478' },
+            // Google Public STUN (Global standard, highly reliable)
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
             // Tencent (Best for CN 4G/5G)
             { urls: 'stun:stun.qq.com:3478' },
-            // Fallback for tricky routers
-            { urls: 'stun:stun.voipbuster.com' }
+            // Xiaomi (Good for CN Wifi)
+            { urls: 'stun:stun.miwifi.com:3478' },
         ],
         iceTransportPolicy: 'all', 
         iceCandidatePoolSize: 10,
@@ -49,8 +51,7 @@ const App: React.FC = () => {
   const connectionsRef = useRef<any[]>([]); 
   const peerRef = useRef<any>(null);
   const gameStateRef = useRef<GameState | null>(null);
-  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
-
+  
   const [isHost, setIsHost] = useState<boolean>(localStorage.getItem('startups_isHost') === 'true');
   const [lobbyPlayers, setLobbyPlayers] = useState<{ peerId: string, name: string, uuid: string }[]>([]);
 
@@ -78,33 +79,24 @@ const App: React.FC = () => {
 
   // Handle data reception
   const handleData = (msg: NetworkMessage, conn: any) => {
-    // console.log(`[DATA] ${msg.type}`, msg.payload);
-    
     switch (msg.type) {
         case 'JOIN_LOBBY':
              if (isHost) {
-                 const newPlayer = msg.payload; // { peerId, name, uuid }
+                 const newPlayer = msg.payload; 
                  
-                 // RECONNECT LOGIC: Check if game is already running and this player exists
+                 // RECONNECT LOGIC
                  if (gameStateRef.current) {
                      const existingPlayerIndex = gameStateRef.current.players.findIndex(p => p.uuid === newPlayer.uuid);
                      
                      if (existingPlayerIndex !== -1) {
-                         // Found returning player!
                          const updatedGameState = JSON.parse(JSON.stringify(gameStateRef.current)) as GameState;
                          const player = updatedGameState.players[existingPlayerIndex];
-                         
-                         // Update network ID
                          player.peerId = newPlayer.peerId; 
-                         player.name = newPlayer.name; // Update name just in case
+                         player.name = newPlayer.name;
                          updatedGameState.logs.push(`${player.name} 断线重连成功！`);
                          
-                         setGameState(updatedGameState); // Trigger update locally
-                         
-                         // Sync immediately
-                         if (conn && conn.open) {
-                             conn.send({ type: 'UPDATE_GAME_STATE', payload: updatedGameState });
-                         }
+                         setGameState(updatedGameState);
+                         if (conn && conn.open) conn.send({ type: 'UPDATE_GAME_STATE', payload: updatedGameState });
                          setTimeout(() => broadcast({ type: 'UPDATE_GAME_STATE', payload: updatedGameState }), 200);
                          return;
                      }
@@ -112,25 +104,17 @@ const App: React.FC = () => {
 
                  // STANDARD LOBBY LOGIC
                  setLobbyPlayers(prev => {
-                     // Deduplicate by UUID (prefer persistent ID) or PeerID
                      const exists = prev.find(p => p.uuid === newPlayer.uuid);
-                     
                      let newList;
                      if (exists) {
-                         // Update existing entry (e.g. new Peer ID for same browser)
                          newList = prev.map(p => p.uuid === newPlayer.uuid ? newPlayer : p);
                      } else {
                          newList = [...prev, newPlayer];
                      }
-                     
-                     // Send immediate feedback to the joiner
                      if (conn && conn.open) {
                          conn.send({ type: 'UPDATE_LOBBY', payload: newList });
-                         if (gameStateRef.current) {
-                             conn.send({ type: 'UPDATE_GAME_STATE', payload: gameStateRef.current });
-                         }
+                         if (gameStateRef.current) conn.send({ type: 'UPDATE_GAME_STATE', payload: gameStateRef.current });
                      }
-                     // Broadcast to everyone else
                      setTimeout(() => broadcast({ type: 'UPDATE_LOBBY', payload: newList }), 200);
                      return newList;
                  });
@@ -161,7 +145,6 @@ const App: React.FC = () => {
   useEffect(() => { handleDataRef.current = handleData; });
 
   const broadcast = (msg: NetworkMessage, excludeId?: string) => {
-      // Clean dead connections before broadcasting
       connectionsRef.current = connectionsRef.current.filter(c => c.open);
       connectionsRef.current.forEach(conn => {
           if (excludeId && conn.peer === excludeId) return;
@@ -179,7 +162,6 @@ const App: React.FC = () => {
           } else {
               console.warn("Host connection lost during send");
               setConnectionStatus("⚠️ 信号微弱，正在重试...");
-              // Quick reconnect attempt
               joinGame();
           }
       }
@@ -212,7 +194,6 @@ const App: React.FC = () => {
                   joinGame();
               }
           } else {
-            // FIX: Ensure we properly enter the Lobby view even without autoJoin
             setLobbyPlayers([{ peerId: id, name, uuid }]);
             setView('LOBBY');
           }
@@ -222,7 +203,6 @@ const App: React.FC = () => {
           conn.on('data', (data: NetworkMessage) => handleDataRef.current(data, conn));
           conn.on('open', () => {
               console.log("New connection:", conn.peer);
-              // Avoid duplicates
               if (!connectionsRef.current.some(c => c.peer === conn.peer)) {
                   connectionsRef.current.push(conn);
               }
@@ -236,7 +216,6 @@ const App: React.FC = () => {
       peer.on('disconnected', () => {
           setServerStatus('DISCONNECTED');
           setConnectionStatus("⚠️ 网络断开");
-          // Do not auto-reconnect immediately to avoid loops, wait for user action or visibility change
       });
       
       peer.on('error', (err: any) => {
@@ -261,8 +240,6 @@ const App: React.FC = () => {
       };
 
       document.addEventListener('visibilitychange', handleVisibilityChange);
-      
-      // Cleanup
       return () => {
           document.removeEventListener('visibilitychange', handleVisibilityChange);
           if (peerRef.current) peerRef.current.destroy();
@@ -290,27 +267,26 @@ const App: React.FC = () => {
           peerRef.current.reconnect();
       }
 
-      setConnectionStatus(`🔄 正在呼叫...`);
+      setConnectionStatus(`🔄 呼叫房主...`);
       
-      // 2. FORCE CLOSE existing connections to this host.
-      // This fixes the "stale socket" issue on mobile.
+      // 2. FORCE CLOSE existing connections
       const existingConns = connectionsRef.current.filter(c => c.peer === cleanHostId);
       existingConns.forEach(c => c.close());
       connectionsRef.current = connectionsRef.current.filter(c => c.peer !== cleanHostId);
 
-      // 3. Create NEW connection
+      // 3. Create NEW connection with extended timeout logic
       const conn = peerRef.current.connect(cleanHostId, { 
           reliable: true,
           serialization: 'json'
       });
       
-      // 4. Timeout handler
+      // 4. Extended Timeout for Mobile/Cross-Network (45 seconds)
       const timeout = setTimeout(() => {
           if (!conn.open) {
-              setConnectionStatus("❌ 超时。请房主检查手机是否锁屏。");
+              setConnectionStatus("❌ 连接超时。请尝试切换 4G/5G 网络。");
               conn.close();
           }
-      }, 15000);
+      }, 45000);
 
       conn.on('open', () => {
           clearTimeout(timeout);
@@ -319,7 +295,6 @@ const App: React.FC = () => {
           setIsHost(false);
           setConnectionStatus("✅ 连接成功");
           
-          // Send join request WITH UUID for reconnect support
           const msg = { type: 'JOIN_LOBBY', payload: { peerId: peerId, name: peerName, uuid: uuid } } as NetworkMessage;
           conn.send(msg);
           conn.send({ type: 'REQUEST_STATE', payload: {} });
@@ -363,7 +338,6 @@ const App: React.FC = () => {
           if (peerRef.current) peerRef.current.destroy();
           setPeerId(null);
           setServerStatus('DISCONNECTED');
-          // User will re-click "Enter Lobby"
       }
   };
 
@@ -374,7 +348,7 @@ const App: React.FC = () => {
       }
   };
 
-  // --- GAMEPLAY ACTIONS (Unchanged) ---
+  // --- GAMEPLAY ACTIONS ---
   const syncGameState = (newState: GameState) => {
       newState.version = (newState.version || 0) + 1;
       setGameState(newState);
@@ -471,7 +445,6 @@ const App: React.FC = () => {
     if (currentPlayer.peerId !== peerId) return;
     if (gameState.phase !== 'PLAY') return;
 
-    // RULE CHANGE: Cannot play the card that was just drawn (from Deck or Market)
     if (gameState.turnState.drawnCardId === card.id) {
         alert("规则限制：本回合刚获得的牌不能立即打出（无法投资或弃入市场）。请打出其他手牌。");
         return;
@@ -492,10 +465,7 @@ const App: React.FC = () => {
     }
 
     newGameState.players = updateTokens(newGameState.players);
-
-    // Turn Advancement with SKIP Logic
     newGameState = advanceTurn(newGameState);
-
     syncGameState(newGameState);
   };
 
@@ -540,7 +510,6 @@ const App: React.FC = () => {
                                     <span className="truncate max-w-[150px]">{connectionStatus}</span>
                                 </div>
                                 <div className="text-[10px] text-slate-600 mt-1">我的ID:</div>
-                                {/* ID Display made larger and clearer for sharing */}
                                 <div className="text-lg font-mono text-emerald-400 font-bold tracking-wider select-all cursor-pointer border border-emerald-900/50 bg-emerald-900/10 px-2 rounded" onClick={copyId}>
                                     {peerId || '获取中...'}
                                 </div>
@@ -567,7 +536,7 @@ const App: React.FC = () => {
                               {isHost && (
                                   <div className="bg-slate-950/50 p-4 rounded text-center border border-blue-500/30">
                                       <p className="text-slate-400 text-xs mb-1">等待玩家加入...</p>
-                                      <p className="text-[10px] text-slate-500 mt-2">点击 ID 可复制。如无法连接，请大家同时点击右上角“重置ID”</p>
+                                      <p className="text-[10px] text-slate-500 mt-2">提示：如果朋友连接超时，请尝试切换 4G/5G 网络</p>
                                   </div>
                               )}
                               {!isHost && (
