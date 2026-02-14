@@ -212,13 +212,9 @@ const App: React.FC = () => {
                   joinGame();
               }
           } else {
-            // Check if we were already in a game state?
-            // No, wait for user to click "Join" to be safe and explicit
+            // FIX: Ensure we properly enter the Lobby view even without autoJoin
             setLobbyPlayers([{ peerId: id, name, uuid }]);
-            if (hostId) {
-                // If we have a stored hostId, maybe user wants to auto-connect?
-                // Let's stay on Login but show ready state
-            }
+            setView('LOBBY');
           }
       });
 
