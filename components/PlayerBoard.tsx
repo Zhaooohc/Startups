@@ -13,6 +13,7 @@ interface PlayerBoardProps {
   targetMode: 'tableau' | 'market';
   setTargetMode: (mode: 'tableau' | 'market') => void;
   revealHands?: boolean;
+  lockedCardId?: string | null; // ID of the card drawn this turn
 }
 
 export const PlayerBoard: React.FC<PlayerBoardProps> = ({
@@ -23,7 +24,8 @@ export const PlayerBoard: React.FC<PlayerBoardProps> = ({
   canPlay,
   targetMode,
   setTargetMode,
-  revealHands = false
+  revealHands = false,
+  lockedCardId
 }) => {
   const showHandCards = isLocalPlayer || revealHands;
 
@@ -94,27 +96,43 @@ export const PlayerBoard: React.FC<PlayerBoardProps> = ({
           <div className="flex gap-2 justify-center">
               {showHandCards ? (
                   // Show Actual Cards
-                  player.hand.map((card) => (
-                    <div key={card.id} className="relative group">
-                        <Card 
-                            card={card} 
-                            onClick={() => canPlay && onPlayCard && onPlayCard(card)}
-                            className={`${canPlay ? 'hover:-translate-y-2 hover:shadow-lg hover:shadow-blue-500/20 ring-2 ring-transparent hover:ring-white' : 'opacity-80'}`}
-                        />
-                        {canPlay && (
-                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-lg pointer-events-none">
-                                <span className="text-xs font-bold text-white bg-black/50 px-2 py-1 rounded">
-                                    {targetMode === 'tableau' ? '投资' : '弃牌'}
-                                </span>
-                            </div>
-                        )}
-                        {revealHands && !isLocalPlayer && (
-                           <div className="absolute -top-2 -right-2 bg-yellow-500 text-black text-[10px] font-bold px-1 rounded-full animate-pulse shadow-sm">
-                              +1
-                           </div>
-                        )}
-                    </div>
-                  ))
+                  player.hand.map((card) => {
+                    const isLocked = lockedCardId === card.id;
+                    return (
+                      <div key={card.id} className="relative group">
+                          <Card 
+                              card={card} 
+                              onClick={() => {
+                                  if (canPlay && !isLocked && onPlayCard) onPlayCard(card);
+                              }}
+                              className={`
+                                  ${canPlay && !isLocked ? 'hover:-translate-y-2 hover:shadow-lg hover:shadow-blue-500/20 ring-2 ring-transparent hover:ring-white cursor-pointer' : ''}
+                                  ${isLocked ? 'opacity-50 grayscale cursor-not-allowed border-dashed border-slate-500' : ''}
+                                  ${!canPlay ? 'opacity-80' : ''}
+                              `}
+                          />
+                          {canPlay && !isLocked && (
+                              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-lg pointer-events-none">
+                                  <span className="text-xs font-bold text-white bg-black/50 px-2 py-1 rounded">
+                                      {targetMode === 'tableau' ? '投资' : '弃牌'}
+                                  </span>
+                              </div>
+                          )}
+                          {isLocked && isLocalPlayer && (
+                              <div className="absolute inset-0 flex items-center justify-center rounded-lg pointer-events-none z-20">
+                                   <div className="bg-slate-900/80 p-1 rounded-full border border-slate-500">
+                                      🔒
+                                   </div>
+                              </div>
+                          )}
+                          {revealHands && !isLocalPlayer && (
+                             <div className="absolute -top-2 -right-2 bg-yellow-500 text-black text-[10px] font-bold px-1 rounded-full animate-pulse shadow-sm">
+                                +1
+                             </div>
+                          )}
+                      </div>
+                    );
+                  })
               ) : (
                   // Show Card Backs
                   player.hand.map((_, idx) => (
@@ -122,6 +140,11 @@ export const PlayerBoard: React.FC<PlayerBoardProps> = ({
                   ))
               )}
           </div>
+          {isLocalPlayer && canPlay && lockedCardId && (
+              <div className="text-center mt-2 text-[10px] text-slate-500 italic">
+                  🔒 刚获得的牌本回合不可打出
+              </div>
+          )}
       </div>
     </div>
   );

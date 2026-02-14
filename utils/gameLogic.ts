@@ -121,7 +121,7 @@ export const updateTokens = (players: Player[]): Player[] => {
       }
     });
 
-    // 2. Award Token
+    // 2. Award Token (In-Game Control)
     if (potentialOwners.length > 0) {
        let winnerId: number | null = null;
 
@@ -130,8 +130,7 @@ export const updateTokens = (players: Player[]): Player[] => {
          winnerId = potentialOwners[0];
        } else {
          // Tie detected.
-         // Rule: "First Come First Served". 
-         // If the previous owner is in the tie, they keep it.
+         // Rule: "First Come First Served" for holding the token during the game.
          const previousOwnerId = currentTokenHolders[company];
          if (previousOwnerId !== undefined && potentialOwners.includes(previousOwnerId)) {
            winnerId = previousOwnerId;
@@ -153,12 +152,6 @@ export const calculateFinalScores = (players: Player[]): FinalStats => {
     ...p,
     tableau: [...p.tableau, ...p.hand],
   }));
-
-  // Identify who held the token at the END of the game (before revealing hands)
-  const legacyTokenHolders: Record<string, number> = {};
-  players.forEach(p => {
-      p.tokens.forEach(t => legacyTokenHolders[t] = p.id);
-  });
 
   const companyTypes = Object.keys(COMPANY_CONFIGS) as CompanyType[];
   const companyStats: CompanyScoring[] = [];
@@ -188,11 +181,10 @@ export const calculateFinalScores = (players: Player[]): FinalStats => {
     if (potentialOwners.length === 1) {
         winnerId = potentialOwners[0];
     } else if (potentialOwners.length > 1) {
-        // Tie-breaker
-        const incumbentId = legacyTokenHolders[company];
-        if (incumbentId !== undefined && potentialOwners.includes(incumbentId)) {
-            winnerId = incumbentId; 
-        }
+        // Tie detected.
+        // NEW RULE: If there is a tie, NO ONE WINS. It is a stalemate.
+        // Even if someone holds the token, they do not get paid.
+        winnerId = null; 
     }
 
     companyStats.push({

@@ -471,10 +471,9 @@ const App: React.FC = () => {
     if (currentPlayer.peerId !== peerId) return;
     if (gameState.phase !== 'PLAY') return;
 
-    if (targetMode === 'market' && 
-        gameState.turnState.source === 'MARKET' && 
-        gameState.turnState.drawnCardId === card.id) {
-        alert("你刚从市场拿回的这张牌不能立刻弃回市场！");
+    // RULE CHANGE: Cannot play the card that was just drawn (from Deck or Market)
+    if (gameState.turnState.drawnCardId === card.id) {
+        alert("规则限制：本回合刚获得的牌不能立即打出（无法投资或弃入市场）。请打出其他手牌。");
         return;
     }
 
@@ -669,7 +668,8 @@ const App: React.FC = () => {
                         onPlayCard={handlePlayCard}
                         targetMode={targetMode}
                         setTargetMode={setTargetMode}
-                        revealHands={isScoring} 
+                        revealHands={isScoring}
+                        lockedCardId={gameState.turnState.drawnCardId} // Pass the locked card ID here
                     />
                 ))}
             </div>
