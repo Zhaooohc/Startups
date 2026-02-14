@@ -8,21 +8,19 @@ import { PlayerBoard } from './components/PlayerBoard';
 import { ReferenceGuide } from './components/ReferenceGuide';
 import { ScoringSidebar } from './components/ScoringSidebar';
 
-// Optimized for better connectivity in China + Global
-// Added Bilibili and more robust servers for mobile networks
+// Strict STUN list optimized for China
+// Removed Google/Twilio to prevent timeouts waiting for blocked servers
 const PEER_CONFIG = {
     debug: 2,
-    secure: true, // Force HTTPS/WSS
+    secure: true, // Vercel requires HTTPS, so secure is mandatory
     config: {
         iceServers: [
-            // China optimized (Bilibili is often very stable)
-            { urls: 'stun:stun.bilibili.com:3478' },
-            { urls: 'stun:stun.qq.com:3478' },
+            // Xiaomi (Very reliable in CN)
             { urls: 'stun:stun.miwifi.com:3478' },
-            // Global / Backup
-            { urls: 'stun:stun.syncthing.net:3478' },
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' },
+            // Tencent
+            { urls: 'stun:stun.qq.com:3478' },
+            // Fallback (Generic VoIP)
+            { urls: 'stun:stun.voipbuster.com' },
         ],
         iceCandidatePoolSize: 10,
     },
@@ -34,7 +32,7 @@ const App: React.FC = () => {
   const [peerName, setPeerName] = useState<string>(localStorage.getItem('startups_name') || '');
   const [hostId, setHostId] = useState<string>(localStorage.getItem('startups_hostId') || '');
   const [connectionStatus, setConnectionStatus] = useState<string>('');
-  const [serverStatus, setServerStatus] = useState<'DISCONNECTED' | 'CONNECTING' | 'CONNECTED'>('DISCONNECTED');
+  const [serverStatus, setServerStatus] = useState<'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR'>('DISCONNECTED');
   
   const connectionsRef = useRef<any[]>([]); 
   const peerRef = useRef<any>(null);
@@ -128,29 +126,31 @@ const App: React.FC = () => {
           if (hostConn) {
               hostConn.send(msg);
           } else {
-              // Try to reconnect if connection lost
-              setConnectionStatus("尝试重新连接房主...");
+              setConnectionStatus("与房主断开，尝试重连...");
               joinGame();
           }
       }
   };
 
   const initPeer = (name: string, autoJoin: boolean = false) => {
+      // Cleanup existing peer
       if (peerRef.current) {
           peerRef.current.destroy();
           peerRef.current = null;
+          connectionsRef.current = [];
       }
 
       setServerStatus('CONNECTING');
-      setConnectionStatus("连接信令服务器...");
+      setConnectionStatus("正在连接信令服务器...");
       
       const peer = new Peer(null, PEER_CONFIG);
       peerRef.current = peer;
       
       peer.on('open', (id: string) => {
+          console.log("Peer ID acquired:", id);
           setPeerId(id);
           setServerStatus('CONNECTED');
-          setConnectionStatus("在线");
+          setConnectionStatus("服务器已连接");
           if (autoJoin) {
               if (isHost) {
                   setLobbyPlayers([{ peerId: id, name }]);
@@ -173,12 +173,18 @@ const App: React.FC = () => {
           conn.on('close', () => {
               connectionsRef.current = connectionsRef.current.filter(c => c !== conn);
           });
+          conn.on('error', (err: any) => console.error("Conn error:", err));
       });
 
-      peer.on('disconnected', () => setServerStatus('DISCONNECTED'));
+      peer.on('disconnected', () => {
+          setServerStatus('DISCONNECTED');
+          setConnectionStatus("与服务器断开连接");
+          // Optional: Auto-reconnect logic could go here, but manual is safer for mobile
+      });
+      
       peer.on('error', (err: any) => {
           console.error("Peer Error:", err);
-          setServerStatus('DISCONNECTED');
+          setServerStatus('ERROR');
           setConnectionStatus(`网络错误: ${err.type}`);
       });
   };
@@ -188,44 +194,65 @@ const App: React.FC = () => {
     if (peerName && !peerRef.current) {
         initPeer(peerName, true);
     }
+    // Cleanup on unmount
+    return () => {
+        if (peerRef.current) peerRef.current.destroy();
+    };
   }, []);
 
   const createGame = () => { setIsHost(true); setConnectionStatus("创建房间中"); };
   
   const joinGame = () => {
       const cleanHostId = hostId.trim();
-      if (!cleanHostId || !peerRef.current) return;
+      if (!cleanHostId || !peerRef.current) {
+          setConnectionStatus("无效的 ID 或网络未就绪");
+          return;
+      }
       
-      if (peerRef.current.disconnected) peerRef.current.reconnect();
+      if (peerRef.current.disconnected) {
+          setConnectionStatus("正在重连服务器...");
+          peerRef.current.reconnect();
+      }
 
-      setConnectionStatus("连接房主中 (请耐心等待)...");
+      setConnectionStatus("正在呼叫房主...");
+      
+      // Close existing connection to host if any (to prevent stale sockets)
+      const existingConn = connectionsRef.current.find(c => c.peer === cleanHostId);
+      if (existingConn) {
+          existingConn.close();
+          connectionsRef.current = connectionsRef.current.filter(c => c.peer !== cleanHostId);
+      }
+
       const conn = peerRef.current.connect(cleanHostId, { reliable: true, serialization: 'json' });
       
-      // Increased timeout to 15 seconds for mobile networks
       const timeout = setTimeout(() => {
           if (!connectionsRef.current.some(c => c.peer === cleanHostId && c.open)) {
-              setConnectionStatus("连接超时，正在重试...");
-              // Optional: Don't kill connection immediately, user can click retry
+              setConnectionStatus("连接超时。请检查房主 ID 是否正确，或双方点击「重置网络」。");
           }
       }, 15000);
 
       conn.on('open', () => {
           clearTimeout(timeout);
+          console.log("Connected to Host:", cleanHostId);
           connectionsRef.current = connectionsRef.current.filter(c => c.peer !== cleanHostId);
           connectionsRef.current.push(conn);
           setIsHost(false);
+          setConnectionStatus("已连接房主，等待响应...");
+          
           const msg = { type: 'JOIN_LOBBY', payload: { peerId: peerId, name: peerName } } as NetworkMessage;
           conn.send(msg);
-          // Also request state in case game is already running
           conn.send({ type: 'REQUEST_STATE', payload: {} });
       });
 
       conn.on('data', (data: NetworkMessage) => handleDataRef.current(data, conn));
       
-      // Handle connection error explicitly
       conn.on('error', (err: any) => {
           console.error("Connection Error", err);
-          setConnectionStatus("连接失败");
+          setConnectionStatus("连接失败，请重试");
+      });
+
+      conn.on('close', () => {
+          setConnectionStatus("与房主连接断开");
       });
   };
 
@@ -233,6 +260,7 @@ const App: React.FC = () => {
       setHostId('');
       localStorage.removeItem('startups_hostId');
       setLobbyPlayers([{ peerId: peerId!, name: peerName }]);
+      setConnectionStatus("已取消");
   };
 
   const fullReset = () => {
@@ -240,10 +268,25 @@ const App: React.FC = () => {
       window.location.reload();
   };
 
+  const resetNetwork = () => {
+      if (confirm("重置网络将断开当前连接并获取新的 ID，确定吗？")) {
+          setConnectionStatus("重置中...");
+          setIsHost(false);
+          setLobbyPlayers([]);
+          setHostId('');
+          setGameState(null);
+          setView('LOGIN'); // Force back to login to ensure clean slate
+          // Small delay to allow UI to clear before re-init
+          setTimeout(() => {
+             if (peerName) initPeer(peerName, false);
+          }, 500);
+      }
+  };
+
   const copyId = () => {
       if (peerId) {
           navigator.clipboard.writeText(peerId);
-          alert("ID 已复制到剪贴板");
+          alert("ID 已复制");
       }
   };
 
@@ -379,6 +422,15 @@ const App: React.FC = () => {
     syncGameState(newGameState);
   };
 
+  // --- RENDERING HELPER: Status Dot ---
+  const StatusDot = () => {
+      let color = 'bg-slate-500';
+      if (serverStatus === 'CONNECTED') color = 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]';
+      if (serverStatus === 'CONNECTING') color = 'bg-yellow-500 animate-pulse';
+      if (serverStatus === 'ERROR' || serverStatus === 'DISCONNECTED') color = 'bg-red-500';
+      return <div className={`w-3 h-3 rounded-full ${color} inline-block mr-2`} title={`服务器状态: ${serverStatus}`} />;
+  };
+
   // --- RENDERING ---
   if (view === 'LOGIN' || view === 'LOBBY') {
       return (
@@ -389,24 +441,38 @@ const App: React.FC = () => {
                       <div className="space-y-4">
                           <input type="text" value={peerName} onChange={(e) => setPeerName(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white" placeholder="输入昵称..." />
                           <button onClick={() => peerName && initPeer(peerName)} disabled={!peerName} className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white font-bold py-3 rounded-lg">{serverStatus === 'CONNECTING' ? '连接中...' : '开始游戏'}</button>
-                          <div className="text-xs text-slate-500 text-center">{connectionStatus}</div>
+                          <div className="flex items-center justify-center text-xs text-slate-500 mt-2">
+                             <StatusDot />
+                             <span>{connectionStatus}</span>
+                          </div>
                       </div>
                   </div>
                ) : (
                   <div className="bg-slate-800 p-8 rounded-xl max-w-lg w-full border border-white/10 shadow-2xl">
-                      <div className="flex justify-between items-center mb-6">
+                      <div className="flex justify-between items-start mb-6">
                           <div>
-                            <h2 className="text-2xl font-bold text-white">大厅 (Lobby)</h2>
-                            <p className="text-xs text-green-400">{connectionStatus}</p>
+                            <div className="flex items-center gap-2 mb-1">
+                                <h2 className="text-2xl font-bold text-white">大厅</h2>
+                                <span className="bg-slate-700 text-xs px-2 py-0.5 rounded text-slate-300">
+                                    {isHost ? '我是房主' : '我是玩家'}
+                                </span>
+                            </div>
+                            <div className="flex items-center text-xs text-slate-400">
+                                <StatusDot />
+                                {connectionStatus}
+                            </div>
                           </div>
-                          <button onClick={fullReset} className="text-[10px] text-red-400 border border-red-900/50 px-2 py-1 rounded hover:bg-red-900/20">重置所有数据</button>
+                          <div className="flex flex-col gap-2">
+                            <button onClick={resetNetwork} className="text-[10px] bg-slate-700 text-white border border-slate-600 px-2 py-1 rounded hover:bg-slate-600">📡 重置网络</button>
+                            <button onClick={fullReset} className="text-[10px] text-red-400 border border-red-900/50 px-2 py-1 rounded hover:bg-red-900/20">🗑️ 清空缓存</button>
+                          </div>
                       </div>
 
                       {!isHost && !hostId && (
                           <div className="grid grid-cols-2 gap-4 mb-6">
                               <button onClick={createGame} className="bg-indigo-600 hover:bg-indigo-500 p-4 rounded-xl font-bold text-white text-center">创建房间</button>
                               <div className="flex flex-col gap-2">
-                                  <input type="text" placeholder="房主 ID" value={hostId} onChange={(e) => setHostId(e.target.value)} className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+                                  <input type="text" placeholder="输入房主 ID" value={hostId} onChange={(e) => setHostId(e.target.value)} className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white" />
                                   <button onClick={joinGame} disabled={!hostId} className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white font-bold py-2 rounded-lg">加入</button>
                               </div>
                           </div>
@@ -415,32 +481,43 @@ const App: React.FC = () => {
                       {(isHost || hostId) && (
                           <div className="space-y-6">
                               {isHost && (
-                                  <div className="bg-slate-950/50 p-4 rounded text-center">
-                                      <p className="text-slate-400 text-xs mb-1">分享此 ID 给好友:</p>
-                                      <div className="flex gap-2 justify-center items-center">
-                                          <code className="text-xl font-mono text-blue-400 select-all">{peerId}</code>
-                                          <button onClick={copyId} className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-300">复制</button>
+                                  <div className="bg-slate-950/50 p-4 rounded text-center border border-blue-500/30">
+                                      <p className="text-slate-400 text-xs mb-1">将此 ID 发给好友 (长按复制):</p>
+                                      <div onClick={copyId} className="flex gap-2 justify-center items-center cursor-pointer active:scale-95 transition-transform">
+                                          <code className="text-2xl font-mono text-blue-400 break-all">{peerId}</code>
+                                          <span className="text-lg">📋</span>
                                       </div>
+                                      <p className="text-[10px] text-slate-500 mt-2">注意：如果刷新页面，此 ID 会改变，需重新发送。</p>
                                   </div>
                               )}
                               {!isHost && (
-                                  <div className="flex justify-between items-center">
-                                      <button onClick={cancelJoin} className="text-xs text-red-400 hover:text-red-300">取消 / 返回</button>
-                                      <button onClick={joinGame} className="text-xs text-blue-400 hover:text-blue-300 font-bold">↻ 重新连接</button>
+                                  <div className="flex justify-between items-center bg-slate-900/50 p-3 rounded">
+                                      <span className="text-xs text-slate-400">房主: {hostId}</span>
+                                      <div className="flex gap-2">
+                                        <button onClick={cancelJoin} className="text-xs text-red-400 hover:text-red-300">取消</button>
+                                        <button onClick={joinGame} className="text-xs bg-blue-600 px-2 py-1 rounded text-white hover:bg-blue-500 font-bold">↻ 重连</button>
+                                      </div>
                                   </div>
                               )}
                               <div>
-                                  <h3 className="text-sm text-slate-500 font-bold mb-2">玩家 ({lobbyPlayers.length})</h3>
+                                  <h3 className="text-sm text-slate-500 font-bold mb-2">已连接玩家 ({lobbyPlayers.length})</h3>
                                   <div className="space-y-2">
                                     {lobbyPlayers.map((p, i) => (
-                                        <div key={i} className="bg-slate-700/50 p-3 rounded flex gap-3 text-white">
+                                        <div key={i} className="bg-slate-700/50 p-3 rounded flex gap-3 text-white border border-white/5">
                                             <span className="font-bold">{p.name}</span>
                                             {p.peerId === peerId && <span className="text-xs text-green-400 my-auto ml-auto">(你)</span>}
                                         </div>
                                     ))}
+                                    {lobbyPlayers.length === 0 && <div className="text-slate-600 text-xs italic">暂无玩家连接...</div>}
                                   </div>
                               </div>
-                              {isHost ? <button onClick={handleStartGame} disabled={lobbyPlayers.length < 3 || lobbyPlayers.length > 6} className="w-full bg-green-600 hover:bg-green-500 disabled:bg-slate-700 text-white font-bold py-4 rounded-xl">{lobbyPlayers.length < 3 ? `还需 ${3-lobbyPlayers.length} 人` : '开始游戏'}</button> : <div className="text-center text-slate-400 animate-pulse">等待房主开始...</div>}
+                              {isHost ? (
+                                <button onClick={handleStartGame} disabled={lobbyPlayers.length < 3 || lobbyPlayers.length > 6} className="w-full bg-green-600 hover:bg-green-500 disabled:bg-slate-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all">
+                                    {lobbyPlayers.length < 3 ? `还需 ${3-lobbyPlayers.length} 人` : '🚀 开始游戏'}
+                                </button>
+                              ) : (
+                                <div className="text-center text-slate-400 animate-pulse bg-slate-900/30 p-2 rounded">等待房主开始...</div>
+                              )}
                           </div>
                       )}
                   </div>
@@ -449,7 +526,14 @@ const App: React.FC = () => {
       )
   }
 
-  if (!gameState) return <div className="text-white text-center mt-20">同步中... <button onClick={joinGame} className="text-blue-400 underline">重试</button></div>;
+  if (!gameState) return (
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white">
+        <div className="animate-spin text-4xl mb-4">⏳</div>
+        <p>同步游戏数据中...</p>
+        <button onClick={joinGame} className="mt-4 text-blue-400 underline text-sm">长时间未响应？点击重试</button>
+        <button onClick={() => setView('LOBBY')} className="mt-8 text-slate-500 text-xs border border-slate-700 px-2 py-1 rounded">返回大厅</button>
+    </div>
+  );
 
   const currentPlayer = gameState.players[gameState.currentPlayerIndex];
   const isMyTurn = currentPlayer.peerId === peerId;
@@ -460,10 +544,11 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-slate-900 text-slate-200 font-sans flex flex-col xl:flex-row overflow-hidden">
       <div className="flex-1 flex flex-col h-screen overflow-y-auto">
         <header className="bg-slate-950/80 border-b border-white/5 p-4 flex justify-between items-center sticky top-0 z-50 backdrop-blur-md">
-            <h1 className="text-2xl font-black bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">STARTUPS 创业公司</h1>
-            <div className="flex items-center gap-4">
-                <button onClick={() => sendToHost({ type: 'REQUEST_STATE', payload: {} })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1 rounded text-xs border border-white/10">🔄 强制同步</button>
-                {isHost && !isScoring && !isReadyToScore && <button onClick={handleForceFinish} className="bg-red-900/30 text-red-400 px-3 py-1 rounded text-xs border border-red-500/20">⚠️ 强制结束</button>}
+            <h1 className="text-xl md:text-2xl font-black bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent truncate">STARTUPS</h1>
+            <div className="flex items-center gap-2 md:gap-4">
+                <StatusDot />
+                <button onClick={() => sendToHost({ type: 'REQUEST_STATE', payload: {} })} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1 rounded text-xs border border-white/10">🔄 同步</button>
+                {isHost && !isScoring && !isReadyToScore && <button onClick={handleForceFinish} className="bg-red-900/30 text-red-400 px-3 py-1 rounded text-xs border border-red-500/20">⚠️ 结束</button>}
             </div>
         </header>
 
