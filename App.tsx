@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Peer } from 'peerjs';
-import { initializeGame, canDrawFromDeck, canDrawFromMarket, updateTokens, calculateFinalScores } from './utils/gameLogic';
+import { initializeGame, canDrawFromDeck, canDrawFromMarket, updateTokens, calculateFinalScores, advanceTurn } from './utils/gameLogic';
 import { GameState, Card, Player, NetworkMessage } from './types';
 import { Market } from './components/Market';
 import { PlayerBoard } from './components/PlayerBoard';
@@ -477,7 +477,7 @@ const App: React.FC = () => {
         return;
     }
 
-    const newGameState = JSON.parse(JSON.stringify(gameState)) as GameState;
+    let newGameState = JSON.parse(JSON.stringify(gameState)) as GameState;
     const player = newGameState.players[newGameState.currentPlayerIndex];
     const cardIndex = player.hand.findIndex(c => c.id === card.id);
     if (cardIndex === -1) return;
@@ -493,14 +493,8 @@ const App: React.FC = () => {
 
     newGameState.players = updateTokens(newGameState.players);
 
-    if (newGameState.deck.length === 0 && newGameState.market.length === 0) {
-        newGameState.phase = 'READY_TO_SCORE';
-        newGameState.logs.push("牌堆和市场均已清空！等待结算。");
-    } else {
-        newGameState.currentPlayerIndex = (newGameState.currentPlayerIndex + 1) % newGameState.players.length;
-        newGameState.phase = 'DRAW';
-        newGameState.turnState = { source: null, drawnCardId: null };
-    }
+    // Turn Advancement with SKIP Logic
+    newGameState = advanceTurn(newGameState);
 
     syncGameState(newGameState);
   };

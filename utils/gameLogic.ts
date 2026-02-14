@@ -91,6 +91,55 @@ export const canDrawFromMarket = (gameState: GameState): boolean => {
   return gameState.market.length > 0;
 };
 
+// Logic to advance turn, handling skipping players if they are stuck
+export const advanceTurn = (gameState: GameState): GameState => {
+    const newState = JSON.parse(JSON.stringify(gameState)) as GameState;
+    const totalPlayers = newState.players.length;
+    let attempts = 0;
+
+    // We loop through players to find the next valid one
+    // Max attempts = totalPlayers + 1 to prevent infinite loops (though logic breaks at totalPlayers)
+    while (attempts < totalPlayers) {
+        // 1. Move to next player
+        newState.currentPlayerIndex = (newState.currentPlayerIndex + 1) % totalPlayers;
+        attempts++;
+
+        // 2. Check Global Game End Condition first (Deck Empty AND Market Empty)
+        if (newState.deck.length === 0 && newState.market.length === 0) {
+            newState.phase = 'READY_TO_SCORE';
+            newState.logs.push("牌堆和市场均已清空！游戏结束，等待结算。");
+            return newState;
+        }
+
+        // 3. Check if THIS player is "stuck" (The Skip Rule)
+        // Condition: Deck is empty AND Player cannot take ANY card from market due to tokens
+        const player = newState.players[newState.currentPlayerIndex];
+        
+        if (newState.deck.length === 0) {
+             // Can the player take ANY card from the market?
+             // A player can take a market card if they DO NOT hold the token for it.
+             const canTakeAnyMarketCard = newState.market.some(item => !player.tokens.includes(item.card.type));
+
+             if (!canTakeAnyMarketCard) {
+                 // Player is stuck. Log it and continue loop to next player.
+                 newState.logs.push(`${player.name} 无牌可抓（牌堆空且市场被反垄断锁死），跳过回合。`);
+                 continue; 
+             }
+        }
+
+        // 4. If we are here, the player can act.
+        newState.phase = 'DRAW';
+        newState.turnState = { source: null, drawnCardId: null };
+        return newState;
+    }
+
+    // If we exit the while loop, it means ALL players are stuck (or deck/market empty logic above caught it)
+    // Just in case specific logic leads to a full deadlock with items in market:
+    newState.phase = 'READY_TO_SCORE';
+    newState.logs.push("所有玩家均无法行动，直接进入结算。");
+    return newState;
+};
+
 export const updateTokens = (players: Player[]): Player[] => {
   const newPlayers = JSON.parse(JSON.stringify(players)) as Player[];
   const companyTypes = Object.keys(COMPANY_CONFIGS) as CompanyType[];
@@ -180,10 +229,10 @@ export const calculateFinalScores = (players: Player[]): FinalStats => {
 
     if (potentialOwners.length === 1) {
         winnerId = potentialOwners[0];
-    } else if (potentialOwners.length > 1) {
-        // Tie detected.
-        // NEW RULE: If there is a tie, NO ONE WINS. It is a stalemate.
-        // Even if someone holds the token, they do not get paid.
+    } else {
+        // TIE or NO ONE has cards
+        // NEW RULE CONFIRMATION: If there is a tie, winnerId is NULL.
+        // Even if someone holds the token, they do NOT win the payout.
         winnerId = null; 
     }
 
@@ -194,6 +243,8 @@ export const calculateFinalScores = (players: Player[]): FinalStats => {
     });
 
     // Apply Scoring
+    // CRITICAL FIX: Only execute payment logic if there is a DISTINCT WINNER.
+    // In a tie (winnerId === null), this block is skipped entirely, meaning NO coins change hands.
     if (winnerId !== null) {
       const winner = scoringPlayers[winnerId];
 
