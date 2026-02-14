@@ -8,21 +8,21 @@ import { PlayerBoard } from './components/PlayerBoard';
 import { ReferenceGuide } from './components/ReferenceGuide';
 import { ScoringSidebar } from './components/ScoringSidebar';
 
-// Final Stability Config - Enhanced for Remote Connections
+// Final Stability Config - Optimized for China Network
 const PEER_CONFIG = {
-    debug: 1, // Reduced debug level for performance, use 3 for dev
+    debug: 1, 
     secure: true,
     pingInterval: 5000, 
     config: {
         iceServers: [
-            // Google Public STUN (Global standard, highly reliable)
+            // 1. Domestic China Servers (High Priority)
+            { urls: 'stun:stun.qq.com:3478' },      // Tencent - Very reliable in CN
+            { urls: 'stun:stun.miwifi.com:3478' },  // Xiaomi - Reliable in CN
+            
+            // 2. Global Fallbacks (Low Priority)
+            // Only used if domestic ones fail. Kept for compatibility if someone is using VPN.
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            // Tencent (Best for CN 4G/5G)
-            { urls: 'stun:stun.qq.com:3478' },
-            // Xiaomi (Good for CN Wifi)
-            { urls: 'stun:stun.miwifi.com:3478' },
+            { urls: 'stun:stun.voipbuster.com' } 
         ],
         iceTransportPolicy: 'all', 
         iceCandidatePoolSize: 10,
